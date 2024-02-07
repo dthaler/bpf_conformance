@@ -60,6 +60,18 @@ _get_test_files(const std::filesystem::path& test_file_directory)
     return result;
 }
 
+static const std::map<std::string, bpf_conformance_groups_t> _conformance_groups = {
+    {"legacy", bpf_conformance_groups_t::legacy}};
+
+static std::optional<bpf_conformance_groups_t>
+_get_conformance_group_by_name(std::string group)
+{
+    if (!_conformance_groups.contains(group)) {
+        return {};
+    }
+    return _conformance_groups.find(group)->second;
+}
+
 int
 main(int argc, char** argv)
 {
@@ -80,6 +92,12 @@ main(int argc, char** argv)
             "xdp_prolog", boost::program_options::value<bool>(), "XDP prolog")(
             "elf", boost::program_options::value<bool>(), "ELF format")(
             "cpu_version", boost::program_options::value<std::string>(), "CPU version")(
+            "include_groups",
+            boost::program_options::value<std::vector<std::string>>()->multitoken(),
+            "Include conformance groups")(
+            "exclude_groups",
+            boost::program_options::value<std::vector<std::string>>()->multitoken(),
+            "Exclude conformance groups")(
             "include_regex", boost::program_options::value<std::string>(), "Include regex")(
             "exclude_regex", boost::program_options::value<std::string>(), "Exclude regex");
 
@@ -103,7 +121,8 @@ main(int argc, char** argv)
         }
 
         std::string plugin_path = vm["plugin_path"].as<std::string>();
-        std::stringstream plugin_options_stream(vm.count("plugin_options") ? vm["plugin_options"].as<std::string>() : "");
+        std::stringstream plugin_options_stream(
+            vm.count("plugin_options") ? vm["plugin_options"].as<std::string>() : "");
 
         std::vector<std::string> plugin_options;
         std::string option;
@@ -126,6 +145,35 @@ main(int argc, char** argv)
             } else {
                 std::cout << "Invalid CPU version" << std::endl;
                 return 1;
+            }
+        }
+
+        // Enable default conformance groups, which don't include callx or legacy.
+        bpf_conformance_groups_t groups = bpf_conformance_groups_t::base32 | bpf_conformance_groups_t::base64 |
+                                          bpf_conformance_groups_t::divmul32 | bpf_conformance_groups_t::divmul64;
+        if (cpu_version >= bpf_conformance_test_cpu_version_t::v3) {
+            groups |= bpf_conformance_groups_t::atomic32 | bpf_conformance_groups_t::atomic64;
+        }
+        if (vm.count("include_groups")) {
+            auto include_groups = vm["include_groups"].as<std::vector<std::string>>();
+            for (std::string group_name : include_groups) {
+                if (auto group = _get_conformance_group_by_name(group_name)) {
+                    groups |= *group;
+                } else {
+                    std::cout << "Invalid group: " << group_name << std::endl;
+                    return 1;
+                }
+            }
+        }
+        if (vm.count("exclude_groups")) {
+            auto include_groups = vm["exclude_groups"].as<std::vector<std::string>>();
+            for (std::string group_name : include_groups) {
+                if (auto group = _get_conformance_group_by_name(group_name)) {
+                    groups &= ~(*group);
+                } else {
+                    std::cout << "Invalid group: " << group_name << std::endl;
+                    return 1;
+                }
             }
         }
 
